@@ -1,128 +1,66 @@
-use serde_json::Value;
-use log::{ info, error };
 use env_logger;
-use indicatif::ProgressBar;
-use indicatif::ProgressStyle;
+use std::sync::Arc;
+use indicatif::MultiProgress;
+use tokio::task::JoinHandle;
+use tokio::sync::Semaphore;
+use std::path::PathBuf;
+use num_cpus;
 
-mod fetch_page;
-mod fetch_top_websites;
+mod fetch_warc;
+mod helper_functions;
 
 #[tokio::main]
 async fn main() {
     // Initialize the logger
     env_logger::init();
+    // Load files to download
+    let files: Vec<String> = helper_functions::fetch_lines(20, "warc.paths").unwrap();
 
-    // Fetch top websites
-    let mut websites: Vec<String> = Vec::new();
-    match fetch_top_websites::fetch_top_websites(1000) {
-        Ok(top_websites) => {
-            for website in top_websites {
-                websites.push(website);
+    // Create a vector to store the tasks
+    let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+
+    // Create multibar for tracking progress of downloading and processing
+    let multibar_download: Arc<MultiProgress> = Arc::new(MultiProgress::new());
+    let multibar_process: Arc<MultiProgress> = Arc::new(MultiProgress::new());
+
+    // Limit the number of concurrent tasks to the number of CPUs
+    let num_cpus: usize = num_cpus::get();
+    let sem: Arc<Semaphore> = Arc::new(Semaphore::new(num_cpus));
+
+    for file in files {
+        let permit: Result<
+            tokio::sync::OwnedSemaphorePermit,
+            tokio::sync::AcquireError
+        > = Arc::clone(&sem).acquire_owned().await;
+
+        let file_clone: String = file.clone();
+        let multibar_download_clone: Arc<MultiProgress> = multibar_download.clone();
+        let multibar_process_clone: Arc<MultiProgress> = multibar_process.clone();
+        let task: JoinHandle<()> = tokio::spawn(async move {
+            let _permit: Result<
+                tokio::sync::OwnedSemaphorePermit,
+                tokio::sync::AcquireError
+            > = permit;
+
+            // Download the WARC file
+            let file_path: PathBuf = fetch_warc
+                ::download_warc_file(file_clone.as_str(), multibar_download_clone).await
+                .unwrap();
+
+            // Read and process the WARC file
+            match fetch_warc::read_warc_file(file_path.as_path(), multibar_process_clone).await {
+                Ok(_) => {}
+                Err(e) => eprintln!("Error reading file: {:?} - {:?}", file_clone, e),
             }
-        }
-        Err(e) => {
-            error!("Error fetching top websites: {}", e);
-            return;
-        }
+
+            // Delete the file
+            std::fs::remove_file(&file_path).expect("Failed to delete file");
+        });
+        tasks.push(task);
     }
 
-    // Initialize the progress bar
-    let mut successful = 0;
-    let mut failed = 0;
-    let progress_bar = ProgressBar::new(websites.len() as u64);
-    progress_bar.set_style(
-        ProgressStyle::default_bar()
-            .template("{prefix} | [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} | {msg}")
-            .unwrap()
-            .progress_chars("#>-")
-    );
-
-    for website in websites {
-        match fetch_page::fetch_index(&website).await {
-            Ok(results) => {
-                // Filter results that match the criteria: status is 200 and mime-detected is "text/html" and languages contain "eng"
-                let filtered_results: Vec<&serde_json::Value> = results
-                    .iter()
-                    .filter(
-                        |result|
-                            convert_to_u64(&result["status"]) == 200 &&
-                            result["mime-detected"].as_str().unwrap_or("") == "text/html" &&
-                            result["languages"].as_str().unwrap_or("").contains("eng")
-                    )
-                    .collect();
-
-                // Check if there are any filtered results
-                if filtered_results.is_empty() {
-                    info!("No successful crawl found for {}", website);
-                } else {
-                    // Find the latest crawl by comparing timestamps
-                    let latest_crawl = filtered_results
-                        .iter()
-                        .max_by_key(|result| convert_to_u64(&result["timestamp"]))
-                        .unwrap(); // Safe to unwrap because we checked for empty
-
-                    // Extract offset and length
-                    let offset = convert_to_u64(&latest_crawl["offset"]);
-                    let length = convert_to_u64(&latest_crawl["length"]);
-
-                    // Extract URL
-                    let url_parts: Vec<&str> = latest_crawl["urlkey"]
-                        .as_str()
-                        .unwrap()
-                        .trim_end_matches(")/") // Remove )/ from the end
-                        .split(",")
-                        .collect();
-                    let url_parts: Vec<&str> = url_parts.into_iter().rev().collect();
-                    let url = url_parts.join(".");
-
-                    // Download the page with extracted options
-                    match
-                        fetch_page::download_page(
-                            url.as_str(),
-                            latest_crawl["filename"].as_str().unwrap(),
-                            offset as usize,
-                            length as usize
-                        ).await
-                    {
-                        Ok(file_path) => {
-                            info!("Downloaded text file to: {}", file_path.display());
-                            successful += 1;
-                            progress_bar.set_message(
-                                format!("\x1B[32mSuccessfully downloaded page for {}\x1B[0m", website)
-                            );
-                        }
-                        Err(e) => {
-                            // Update progress bar with error message
-                            failed += 1;
-                            progress_bar.set_message(
-                                format!(
-                                    "\x1B[31mError downloading page for {}: {}\x1B[0m",
-                                    website,
-                                    e
-                                )
-                            );
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                // Update progress bar with error message
-                failed += 1;
-                progress_bar.set_message(
-                    format!("\x1B[31mError fetching index for {}: {}\x1B[0m", website, e)
-                );
-            }
-        }
-        // Update the progress bar
-        progress_bar.set_prefix(
-            format!("\x1B[32m{}\x1B[0m successful, \x1B[31m{}\x1B[0m failed", successful, failed)
-        );
-        progress_bar.inc(1);
+    // Wait for all tasks to complete.
+    for task in tasks {
+        task.await.unwrap();
     }
-    progress_bar.finish_with_message("Completed!");
-}
-
-// Helper function to convert serde Value to u64
-fn convert_to_u64(value: &Value) -> u64 {
-    value.as_str().unwrap().parse::<u64>().unwrap()
 }
