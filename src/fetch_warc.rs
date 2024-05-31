@@ -1,9 +1,8 @@
-use log::{ info, warn };
+use log::warn;
 use reqwest::Client;
 use warc::WarcReader;
 use std::error::Error;
 use std::path::{ Path, PathBuf };
-use url::Url;
 use std::time::{ Instant, Duration };
 use std::collections::HashSet;
 use indicatif::{ MultiProgress, ProgressBar, ProgressStyle };
@@ -13,21 +12,12 @@ use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
 use colored::*;
 
-use crate::helper_functions::fetch_lines;
+use crate::helper_functions::{ fetch_lines, extract_domain_from_string };
 mod webpage;
-
-fn extract_domain(url: &str) -> Option<String> {
-    if let Ok(parsed_url) = Url::parse(url) {
-        if let Some(host) = parsed_url.host_str() {
-            return Some(host.to_string());
-        }
-    }
-    None
-}
 
 pub async fn download_warc_file(
     file_name: &str,
-    multibar: Arc<MultiProgress>
+    multibar: &Arc<MultiProgress>
 ) -> Result<PathBuf, Box<dyn Error>> {
     // Create the URL
     let url: String = format!("https://data.commoncrawl.org/{}", file_name);
@@ -41,7 +31,10 @@ pub async fn download_warc_file(
 
     // Extract the filename from the file path
     let path: &Path = Path::new(file_name);
-    let file_name: std::borrow::Cow<str> = path.file_name().ok_or("Invalid file name")?.to_string_lossy();
+    let file_name: std::borrow::Cow<str> = path
+        .file_name()
+        .ok_or("Invalid file name")?
+        .to_string_lossy();
 
     // Create file paths
     let file_path: PathBuf = dir_path.join(file_name.to_string()).with_extension("gz");
@@ -70,7 +63,7 @@ pub async fn download_warc_file(
         ProgressStyle::default_bar()
             .template(
                 &format!(
-                    "File {}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} | Speed: {{bytes_per_sec}} | Time Left: {{eta}}",
+                    "Downloading {}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} | Speed: {{bytes_per_sec}} | Time Left: {{eta}}",
                     file_number.to_string().green().bold()
                 )
             )
@@ -83,7 +76,7 @@ pub async fn download_warc_file(
         output_file.write_all(&chunk).await?;
     }
     progress_bar.println(
-        format!("{}{}", "Downloaded file to : ".green().bold(), file_path.to_string_lossy().blue())
+        format!("{}{}", "Downloaded file to: ".green().bold(), file_path.to_string_lossy().blue())
     );
     progress_bar.finish_and_clear();
     // Return the path to the extracted file
@@ -92,7 +85,7 @@ pub async fn download_warc_file(
 
 pub async fn read_warc_file(
     file_path: &Path,
-    multibar: Arc<MultiProgress>
+    multibar: &Arc<MultiProgress>
 ) -> Result<Vec<webpage::Webpage>, Box<dyn Error>> {
     let top_websites: HashSet<String> = fetch_lines(0, "top-1m.txt")?.into_iter().collect();
     let mut count: i32 = 0;
@@ -105,13 +98,13 @@ pub async fn read_warc_file(
     let file_number: Vec<&str> = parts[parts.len() - 1].split(".").collect();
     let file_number: &str = file_number[0];
 
-    let progress_bar = multibar.add(ProgressBar::new(100_000));
+    let progress_bar: ProgressBar = multibar.add(ProgressBar::new(100_000));
     progress_bar.set_style(
         ProgressStyle::default_bar()
             .template(
                 &format!(
-                    "{}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] Records read: {{pos}}/≈{{len}} | Time Left: {{eta_precise}} | {{msg}}",
-                    format!("File: {}", file_number.to_string().green().bold())
+                    "{}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] Records read: {{pos}}/≈{{len}} | Time Left: {{eta}} | {{msg}}",
+                    format!("Processing {}", file_number.to_string().green().bold())
                 )
             )
             .unwrap()
@@ -128,22 +121,25 @@ pub async fn read_warc_file(
                     None => String::new(),
                 };
 
-                match extract_domain(&target_uri) {
+                match extract_domain_from_string(&target_uri) {
                     Some(domain) => {
                         if top_websites.contains(&domain) {
                             if let Ok(webpage) = webpage::Webpage::parse_record(&record) {
-                                info!(
-                                    "{} | {} | {} | {} | {} | {} | {}",
-                                    webpage.warc_date,
-                                    webpage.warc_target_uri,
-                                    webpage.warc_identified_payload_type,
-                                    webpage.status_code,
-                                    webpage.content_type,
-                                    webpage.content_length,
-                                    webpage.text_body.len()
-                                );
                                 matching_count += 1;
-                                results.push(webpage);
+                                if webpage.is_some() {
+                                    let webpage: webpage::Webpage = webpage.unwrap();
+                                    if webpage.text_body.is_some() {
+                                        // progress_bar.println(
+                                        //     format!(
+                                        //         "Title: {:?} | Description: {:?} | URL: {:?}",
+                                        //         webpage.title,
+                                        //         webpage.description,
+                                        //         webpage.warc_target_uri
+                                        //     )
+                                        // );
+                                        results.push(webpage);
+                                    }
+                                }
                             }
                             let to_increase: u64 = (count as u64) - progress_bar.position();
                             progress_bar.inc(to_increase);
@@ -162,22 +158,17 @@ pub async fn read_warc_file(
                     // Reset the start time
                     start = Instant::now();
                 }
-                
             }
         }
     }
     let duration: Duration = time_taken.elapsed();
 
     let msg: String = format!(
-        "{} | {} | {}",
-        format!("Finished reading: {}", file_number).green().bold(),
+        "{} | {} | {} | {}",
+        format!("Finished reading {}", file_number).green().bold(),
         format!("Time taken overall: {:.2} s", duration.as_secs_f64()).cyan(),
-        format!(
-            "Matching websites in top {}: {}/{}",
-            top_websites.len(),
-            matching_count,
-            count
-        ).yellow()
+        format!("Matching websites: {}/{}", matching_count, count).yellow(),
+        format!("Valid websites: {}/{}", results.len(), matching_count).yellow()
     );
 
     progress_bar.println(msg);
