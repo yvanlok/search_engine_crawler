@@ -2,11 +2,12 @@ use warc::{ WarcHeader, Record, BufferedBody };
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::RcDom;
+use whichlang::{ detect_language, Lang };
 use std::str::from_utf8;
 
 use crate::helper_functions;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Webpage {
     pub warc_date: Option<String>,
     pub warc_target_uri: Option<String>,
@@ -19,12 +20,14 @@ pub struct Webpage {
     pub description: Option<String>,
     pub links: Option<Vec<String>>,
     pub text_body: Option<String>,
+    pub lang: Option<Lang>,
+    pub lemmatised_text: Option<Vec<String>>,
 }
 
 impl Webpage {
     pub fn parse_record(record: &Record<BufferedBody>) -> Result<Option<Self>, ParseError> {
         // Convert body bytes to UTF-8 string
-        let body = from_utf8(record.body()).map_err(|e|
+        let body: &str = from_utf8(record.body()).map_err(|e|
             ParseError::BodyEncodingError(e.to_string())
         )?;
 
@@ -78,22 +81,45 @@ impl Webpage {
                         |payload_type| Some(payload_type.to_string())
                     );
 
+                let content_length: Option<usize> = record
+                    .header(WarcHeader::ContentLength)
+                    .map_or_else(
+                        || None,
+                        |content_length| Some(content_length.parse().unwrap())
+                    );
+                let mut lang: Option<Lang> = None;
+                let text_body: Option<String> = {
+                    let temp: String = extract_text_body(&dom).unwrap_or_default();
+                    if temp.is_empty() {
+                        None
+                    } else {
+                        lang = Some(detect_language(temp.as_str()));
+                        Some(temp)
+                    }
+                };
+
+                if lang.is_none() || lang.unwrap() != Lang::Eng {
+                    return Ok(None);
+                }
+
+                let lemmatised_text: Option<Vec<String>> = match text_body.as_ref() {
+                    Some(text) => Some(helper_functions::lemmatise_string(&text.to_lowercase())),
+                    None => None,
+                };
+
                 // Generate the Webpage struct from the parsed data
-                let result = Webpage {
+                let result: Webpage = Webpage {
                     warc_date,
                     warc_target_uri: warc_target_uri.clone(),
                     warc_identified_payload_type,
                     status_code,
                     content_type: Some(content_type.to_string()),
-                    content_length: record.header(WarcHeader::ContentLength).map_or_else(
-                        || None,
-                        |content_length| Some(content_length.parse().unwrap())
-                    ),
+                    content_length,
                     html_body: Some(html_body),
                     title: extract_title(&dom),
                     description: extract_description(&dom),
                     links: {
-                        let links = helper_functions
+                        let links: Vec<String> = helper_functions
                             ::extract_links_from_html(&dom, &warc_target_uri.unwrap_or_default())
                             .unwrap_or_default();
                         if links.is_empty() {
@@ -102,14 +128,9 @@ impl Webpage {
                             Some(links)
                         }
                     },
-                    text_body: {
-                        let text_body = extract_text_body(&dom).unwrap_or_default();
-                        if text_body.is_empty() {
-                            None
-                        } else {
-                            Some(text_body)
-                        }
-                    },
+                    text_body,
+                    lang,
+                    lemmatised_text,
                 };
                 Ok(Some(result))
             }

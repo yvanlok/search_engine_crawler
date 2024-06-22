@@ -1,3 +1,5 @@
 /target
 /crawled_data
 .env
+/.sqlx
+/warc_files

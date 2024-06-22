@@ -12,8 +12,8 @@ use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
 use colored::*;
 
-use crate::helper_functions::{ fetch_lines, extract_domain_from_string };
-mod webpage;
+use crate::helper_functions::{ fetch_lines, extract_domain_from_string, file_path_to_number };
+pub mod webpage;
 
 pub async fn download_warc_file(
     file_name: &str,
@@ -26,7 +26,7 @@ pub async fn download_warc_file(
     let client: Client = Client::new();
 
     // Create the directory for storing the files
-    let dir_path: &Path = Path::new("crawled_data/full_warc_files");
+    let dir_path: &Path = Path::new("warc_files");
     create_dir_all(&dir_path)?;
 
     // Extract the filename from the file path
@@ -93,10 +93,7 @@ pub async fn read_warc_file(
     let mut start: Instant = Instant::now();
     let time_taken: Instant = Instant::now();
 
-    let file_path_string: String = file_path.to_string_lossy().to_string();
-    let parts: Vec<&str> = file_path_string.split("-").collect();
-    let file_number: Vec<&str> = parts[parts.len() - 1].split(".").collect();
-    let file_number: &str = file_number[0];
+    let file_number = file_path_to_number(file_path);
 
     let progress_bar: ProgressBar = multibar.add(ProgressBar::new(100_000));
     progress_bar.set_style(
@@ -129,14 +126,6 @@ pub async fn read_warc_file(
                                 if webpage.is_some() {
                                     let webpage: webpage::Webpage = webpage.unwrap();
                                     if webpage.text_body.is_some() {
-                                        // progress_bar.println(
-                                        //     format!(
-                                        //         "Title: {:?} | Description: {:?} | URL: {:?}",
-                                        //         webpage.title,
-                                        //         webpage.description,
-                                        //         webpage.warc_target_uri
-                                        //     )
-                                        // );
                                         results.push(webpage);
                                     }
                                 }
@@ -149,6 +138,8 @@ pub async fn read_warc_file(
                 }
                 count += 1;
                 if count % 1000 == 0 {
+                    let to_increase: u64 = (count as u64) - progress_bar.position();
+                    progress_bar.inc(to_increase);
                     let duration: std::time::Duration = start.elapsed();
                     progress_bar.set_message(
                         format!("Time for 1000 records: {:.2} ms", duration.as_secs_f64() * 1000.0)

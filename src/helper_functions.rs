@@ -1,10 +1,14 @@
 use std::io::{ BufRead, BufReader };
 use std::fs::File;
 use std::error::Error;
-use log::error;
 use std::collections::HashSet;
+use std::path::Path;
 use lazy_static::lazy_static;
 use url::Url;
+// use rust_lemmatizer::get_words_from_string;
+use std::collections::HashMap;
+use once_cell::sync::Lazy;
+use regex::Regex;
 
 use markup5ever_rcdom::{ Handle, NodeData, RcDom };
 
@@ -17,18 +21,13 @@ pub fn extract_domain_from_string(url: &str) -> Option<String> {
     None
 }
 
+// Function to fetch lines from a file.
 pub fn fetch_lines(num: usize, file_path: &str) -> Result<Vec<String>, Box<dyn Error>> {
     // Open the file
-    let file: File = File::open(file_path).map_err(|e| {
-        error!("File not found: {}", e);
-        e
-    })?;
+    let file: File = File::open(file_path)?;
 
     // Create a buffered reader
     let reader: BufReader<File> = BufReader::new(file);
-
-    // Initialize the vector to store the lines
-    let mut top_websites: Vec<String> = Vec::new();
 
     // Read the lines from the file
     let lines: Vec<String> = if num == 0 {
@@ -39,13 +38,40 @@ pub fn fetch_lines(num: usize, file_path: &str) -> Result<Vec<String>, Box<dyn E
         reader.lines().take(num).collect::<Result<Vec<String>, _>>()?
     };
 
-    // Add each line to the vector
-    for line in lines {
-        top_websites.push(line);
-    }
+    Ok(lines)
+}
 
-    // Return the vector of lines
-    Ok(top_websites)
+// Global static for storing the lemma mappings.
+static LEMMA_MAP: Lazy<HashMap<String, String>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+    let lines = fetch_lines(0, "lemmatised_words.txt").expect("Failed to read lemma file");
+
+    let re = Regex::new(r"^([^/]+)[^->]*->(.+)$").unwrap();
+    for entry in lines {
+        if let Some(captures) = re.captures(&entry) {
+            let lemma = captures[1].trim().to_string();
+            let words: Vec<&str> = captures[2]
+                .split(',')
+                .map(|word| word.trim())
+                .collect();
+            for word in words {
+                map.insert(word.to_string(), lemma.clone());
+            }
+        }
+    }
+    map
+});
+
+// Function to lemmatize a given string.
+pub fn lemmatise_string(text: &str) -> Vec<String> {
+    let re: Regex = Regex::new(r"[^a-zA-Z0-9\s]").unwrap(); // regex to match non-word characters
+    let text_no_punct = re.replace_all(text, ""); // remove punctuation
+    text_no_punct
+        .split_whitespace()
+        .map(|word: &str| {
+            LEMMA_MAP.get(word.to_lowercase().as_str()).unwrap_or(&word.to_string()).clone()
+        })
+        .collect()
 }
 
 // Optimized function signature to pass tags set as parameter
@@ -181,4 +207,13 @@ pub fn extract_description_from_html(node: &Handle) -> Option<String> {
         }
     }
     None
+}
+
+pub fn file_path_to_number(file_path: &Path) -> String {
+    let file_path_string: String = file_path.to_string_lossy().to_string();
+    let parts: Vec<&str> = file_path_string.split("-").collect();
+    let file_number: Vec<&str> = parts[parts.len() - 1].split(".").collect();
+    let file_number: &str = file_number[0];
+
+    file_number.to_string()
 }

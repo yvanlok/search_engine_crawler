@@ -1,17 +1,21 @@
 use env_logger;
+
 use std::sync::Arc;
 use indicatif::MultiProgress;
 use tokio::task::JoinHandle;
 use tokio::sync::Semaphore;
 use std::path::PathBuf;
+
 use num_cpus;
 
-mod fetch_warc;
+mod database;
+mod handle_warc;
 mod helper_functions;
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
+
     // Load files to download
     let files: Vec<String> = helper_functions::fetch_lines(20, "warc.paths").unwrap();
 
@@ -20,23 +24,24 @@ async fn main() {
 
     let multibar: Arc<MultiProgress> = Arc::new(MultiProgress::new());
 
-    // Limit the number of concurrent tasks to the number of CPUs
-    let num_cpus: usize = num_cpus::get();
+    // Limit the number of concurrent tasks to the number of CPU cores
+    let num_cpus: usize = num_cpus::get_physical();
     let sem: Arc<Semaphore> = Arc::new(Semaphore::new(num_cpus));
 
+    // let file_path: PathBuf = PathBuf::from("warc_files/test.warc.gz");
+
     // Read and process the WARC file
-    // match
-    //     fetch_warc::read_warc_file(
-    //         PathBuf::from("crawled_data/full_warc_files/test.warc.gz").as_path(),
-    //         &multibar
-    //     ).await
-    // {
+    // match handle_warc::read_warc_file(&file_path, &multibar.clone()).await {
     //     Ok(results) => {
-    //         for result in results {
-    //             if result.text_body.is_some() {
-    //                 // println!("First valid result: {:?}", result);
-    //                 // break;
-    //             }
+    //         // for result in results {
+    //         //     if result.text_body.is_some() {
+    //         //         // println!("First valid result: {:?}", result);
+    //         //         // break;
+    //         //     }
+    //         // }
+    //         match database::add_webpages(&results, &multibar, &file_path).await {
+    //             Ok(_) => println!("Added webpages to the database"),
+    //             Err(e) => eprintln!("Error adding webpages to the database: {:?}", e),
     //         }
     //     }
     //     Err(e) => eprintln!("Error reading file: {:?} - {:?}", "test.warc.gz", e),
@@ -58,18 +63,21 @@ async fn main() {
             > = permit;
 
             // Download the WARC file
-            let file_path: PathBuf = fetch_warc
+            let file_path: PathBuf = handle_warc
                 ::download_warc_file(file_clone.as_str(), &multibar).await
                 .unwrap();
-
+            let mut results: Vec<handle_warc::webpage::Webpage> = Vec::new();
             // Read and process the WARC file
-            match fetch_warc::read_warc_file(file_path.as_path(), &multibar).await {
-                Ok(results) => {
-                    for _result in results {
-                        // TODO: Add to database
-                    }
+            match handle_warc::read_warc_file(file_path.as_path(), &multibar).await {
+                Ok(webpages) => {
+                    results = webpages;
                 }
                 Err(e) => eprintln!("Error reading file: {:?} - {:?}", file_clone, e),
+            }
+
+            match database::add_webpages(&results, &multibar, &file_path.as_path()).await {
+                Ok(_) => println!("Added webpages to the database"),
+                Err(e) => eprintln!("Error adding webpages to the database: {:?}", e),
             }
 
             // Delete the file
