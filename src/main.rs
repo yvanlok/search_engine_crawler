@@ -19,6 +19,10 @@ async fn main() {
     // Load files to download
     let files: Vec<String> = helper_functions::fetch_lines(20, "warc.paths").unwrap();
 
+    let files: Vec<String> = database::fetch_files_to_process().await.unwrap();
+
+    println!("Files left: {:?}", files.len());
+
     // Create a vector to store the tasks
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
 
@@ -28,19 +32,13 @@ async fn main() {
     let num_cpus: usize = num_cpus::get_physical();
     let sem: Arc<Semaphore> = Arc::new(Semaphore::new(num_cpus));
 
-    // let file_path: PathBuf = PathBuf::from("warc_files/test.warc.gz");
+    let file_path: PathBuf = PathBuf::from("warc_files/test.warc.gz");
 
     // Read and process the WARC file
     // match handle_warc::read_warc_file(&file_path, &multibar.clone()).await {
     //     Ok(results) => {
-    //         // for result in results {
-    //         //     if result.text_body.is_some() {
-    //         //         // println!("First valid result: {:?}", result);
-    //         //         // break;
-    //         //     }
-    //         // }
     //         match database::add_webpages(&results, &multibar, &file_path).await {
-    //             Ok(_) => println!("Added webpages to the database"),
+    //             Ok(_) => {}
     //             Err(e) => eprintln!("Error adding webpages to the database: {:?}", e),
     //         }
     //     }
@@ -76,7 +74,12 @@ async fn main() {
             }
 
             match database::add_webpages(&results, &multibar, &file_path.as_path()).await {
-                Ok(_) => println!("Added webpages to the database"),
+                Ok(_) => {
+                    match database::mark_file_as_processed(&file).await {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("Error marking file as processed: {:?}", e),
+                    }
+                }
                 Err(e) => eprintln!("Error adding webpages to the database: {:?}", e),
             }
 

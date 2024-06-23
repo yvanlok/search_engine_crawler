@@ -1,5 +1,6 @@
 use dotenv::dotenv;
-use sqlx::{ PgPool, Row, Postgres, Pool };
+use futures::TryStreamExt;
+use sqlx::{ PgPool, Row, Postgres, Pool, Executor };
 use rand::{ thread_rng, Rng };
 use std::collections::HashMap;
 use std::{ env, path::Path };
@@ -257,5 +258,90 @@ pub async fn add_webpage(
         query.execute(pool).await?;
     }
 
+    Ok(())
+}
+
+const BATCH_SIZE: usize = 1000; // Adjust the batch size as needed
+
+pub async fn fetch_files_to_process() -> Result<Vec<String>, Box<dyn Error + Send + Sync>> {
+    dotenv().ok();
+    let database_url: String = env
+        ::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set in the .env file");
+    let pool: Pool<Postgres> = PgPool::connect(&database_url).await.expect(
+        "Failed to connect to the database"
+    );
+
+    // Check if the table exists
+    let table_exists_query =
+        r#"
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = 'files'
+        )
+    "#;
+    let table_exists: bool = sqlx::query_scalar(table_exists_query).fetch_one(&pool).await?;
+
+    if !table_exists {
+        // Create table if it doesn't exist
+        let create_table_query =
+            r#"
+            CREATE TABLE files (
+                id SERIAL PRIMARY KEY,
+                file_name TEXT NOT NULL UNIQUE,
+                processed BOOLEAN DEFAULT FALSE
+            )
+        "#;
+        pool.execute(create_table_query).await?;
+
+        // Fetch file names from the specified source
+        let files: Vec<String> = helper_functions::fetch_lines(0, "warc.paths").unwrap();
+
+        // Insert the fetched file names into the database if they do not exist using batches
+        for chunk in files.chunks(BATCH_SIZE) {
+            let mut query_builder = sqlx::QueryBuilder::new("INSERT INTO files (file_name) ");
+            query_builder.push_values(chunk, |mut b, file| {
+                b.push_bind(file);
+            });
+            query_builder.push("ON CONFLICT (file_name) DO NOTHING");
+            query_builder.build().execute(&pool).await?;
+        }
+    }
+
+    // Fetch file names that haven't been processed
+    let query = r#"
+        SELECT file_name
+        FROM files
+        WHERE processed = FALSE
+    "#;
+
+    let mut file_names: Vec<String> = Vec::new();
+    let mut rows = sqlx::query(query).fetch(&pool);
+
+    while let Some(row) = rows.try_next().await? {
+        let file_name: String = row.get(0);
+        file_names.push(file_name);
+    }
+
+    Ok(file_names)
+}
+
+pub async fn mark_file_as_processed(file_name: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    dotenv().ok();
+    let database_url: String = env
+        ::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set in the .env file");
+    let pool: Pool<Postgres> = PgPool::connect(&database_url).await.expect(
+        "Failed to connect to the database"
+    );
+
+    let query: &str =
+        r#"
+        UPDATE files
+        SET processed = TRUE
+        WHERE file_name = $1
+    "#;
+
+    sqlx::query(query).bind(file_name).execute(&pool).await?;
     Ok(())
 }

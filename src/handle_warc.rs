@@ -87,7 +87,7 @@ pub async fn read_warc_file(
     file_path: &Path,
     multibar: &Arc<MultiProgress>
 ) -> Result<Vec<webpage::Webpage>, Box<dyn Error>> {
-    let top_websites: HashSet<String> = fetch_lines(0, "top-1m.txt")?.into_iter().collect();
+    let top_websites: HashSet<String> = fetch_lines(100_000, "top-1m.txt")?.into_iter().collect();
     let mut count: i32 = 0;
     let mut matching_count: i32 = 0;
     let mut start: Instant = Instant::now();
@@ -128,6 +128,9 @@ pub async fn read_warc_file(
                                     if webpage.text_body.is_some() {
                                         results.push(webpage);
                                     }
+                                    // if results.len() > 20 {
+                                    //     break;
+                                    // }
                                 }
                             }
                             let to_increase: u64 = (count as u64) - progress_bar.position();
@@ -142,7 +145,7 @@ pub async fn read_warc_file(
                     progress_bar.inc(to_increase);
                     let duration: std::time::Duration = start.elapsed();
                     progress_bar.set_message(
-                        format!("Time for 1000 records: {:.2} ms", duration.as_secs_f64() * 1000.0)
+                        format!("Time for 1000: {:.2} ms", duration.as_secs_f64() * 1000.0)
                             .cyan()
                             .to_string()
                     );
