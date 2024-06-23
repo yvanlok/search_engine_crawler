@@ -95,7 +95,7 @@ pub async fn read_warc_file(
 
     let file_number = file_path_to_number(file_path);
 
-    let progress_bar: ProgressBar = multibar.add(ProgressBar::new(100_000));
+    let progress_bar: ProgressBar = multibar.add(ProgressBar::new(90_000));
     progress_bar.set_style(
         ProgressStyle::default_bar()
             .template(

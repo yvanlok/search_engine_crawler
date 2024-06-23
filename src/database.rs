@@ -26,7 +26,7 @@ pub async fn add_webpages(
         ProgressStyle::default_bar()
             .template(
                 &format!(
-                    "{}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] Added to db: {{pos}}/≈{{len}} | Time Left: {{eta}} | {{msg}}",
+                    "{}: [{{elapsed_precise}}] [{{wide_bar:40.cyan/blue}}] Added to db: {{pos}}/{{len}} | Time Left: {{eta}} | {{msg}}",
                     format!("Adding {}", file_number.green().bold())
                 )
             )
