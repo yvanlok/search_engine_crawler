@@ -2,7 +2,7 @@ use dotenv::dotenv;
 use futures::TryStreamExt;
 use sqlx::{ PgPool, Row, Postgres, Pool, Executor };
 use rand::{ thread_rng, Rng };
-use std::collections::HashMap;
+use std::collections::{ HashMap, HashSet };
 use std::{ env, path::Path };
 use std::error::Error;
 use std::time::{ Duration, Instant };
@@ -50,22 +50,24 @@ pub async fn add_webpages(
         .collect();
 
     // Collect all keywords from all webpages
-    let mut keyword_counts: HashMap<String, i32> = HashMap::new();
+    let mut keyword_counts: HashMap<String, HashSet<String>> = HashMap::new();
     for wp in &filtered_webpages {
-        let keywords: Vec<String> = wp.lemmatised_text.clone().unwrap_or_default();
-        let truncated_keywords: Vec<String> = keywords
-            .iter()
-            .map(|keyword| (
-                if keyword.len() > MAX_KEYWORD_LENGTH {
-                    keyword[..MAX_KEYWORD_LENGTH].to_owned()
-                } else {
-                    keyword.clone()
-                }
-            ))
-            .collect();
+        if let Some(url) = &wp.warc_target_uri {
+            let keywords: Vec<String> = wp.lemmatised_text.clone().unwrap_or_default();
+            let truncated_keywords: Vec<String> = keywords
+                .iter()
+                .map(|keyword| {
+                    if keyword.len() > MAX_KEYWORD_LENGTH {
+                        keyword[..MAX_KEYWORD_LENGTH].to_owned()
+                    } else {
+                        keyword.clone()
+                    }
+                })
+                .collect();
 
-        for keyword in truncated_keywords {
-            *keyword_counts.entry(keyword).or_insert(0) += 1;
+            for keyword in truncated_keywords {
+                keyword_counts.entry(keyword).or_insert_with(HashSet::new).insert(url.clone());
+            }
         }
     }
 
@@ -77,7 +79,7 @@ pub async fn add_webpages(
             keyword_counts
                 .keys()
                 .enumerate()
-                .map(|(i, _)| format!("(${}, 1)", i + 1))
+                .map(|(i, _)| format!("(${}, ${})", i * 2 + 1, i * 2 + 2))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -89,8 +91,8 @@ pub async fn add_webpages(
             let mut transaction = pool.begin().await?;
             let mut query = sqlx::query(&insert_keywords_query);
 
-            for keyword in keyword_counts.keys() {
-                query = query.bind(keyword);
+            for (keyword, urls) in &keyword_counts {
+                query = query.bind(keyword).bind(urls.len() as i32);
             }
 
             let result = query.fetch_all(&mut *transaction).await;
