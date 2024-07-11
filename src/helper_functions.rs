@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::path::Path;
 use lazy_static::lazy_static;
 use url::Url;
-// use rust_lemmatizer::get_words_from_string;
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use regex::Regex;
