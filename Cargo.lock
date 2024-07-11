@@ -2076,6 +2076,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "search_engine_crawler"
+version = "0.1.0"
+dependencies = [
+ "async-std",
+ "colored",
+ "dotenv",
+ "env_logger",
+ "futures",
+ "html5ever",
+ "indicatif",
+ "lazy_static",
+ "log",
+ "markup5ever_rcdom",
+ "num_cpus",
+ "once_cell",
+ "rand",
+ "regex",
+ "reqwest",
+ "retry",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "url",
+ "warc",
+ "whichlang",
+]
+
+[[package]]
 name = "security-framework"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2981,34 +3009,6 @@ checksum = "77afa9a11836342370f4817622a2f0f418b134426d91a82dfb48f532d2ec13ef"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "web_search_engine"
-version = "0.1.0"
-dependencies = [
- "async-std",
- "colored",
- "dotenv",
- "env_logger",
- "futures",
- "html5ever",
- "indicatif",
- "lazy_static",
- "log",
- "markup5ever_rcdom",
- "num_cpus",
- "once_cell",
- "rand",
- "regex",
- "reqwest",
- "retry",
- "serde_json",
- "sqlx",
- "tokio",
- "url",
- "warc",
- "whichlang",
 ]
 
 [[package]]
